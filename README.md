@@ -1,5 +1,33 @@
 <img align="right" style="width: 256px" src="assets/logo.svg">
 
+> [!NOTE]
+> **ShawnMcCool/hy3 is a downstream fork of [outfoxxed/hy3](https://github.com/outfoxxed/hy3).**
+> It is upstream hy3 plus the changes listed below, nothing else.
+>
+> **Differences from upstream** (update this list with every fork commit):
+> - Tabs can cast a drop shadow: `plugin:hy3:tabs:shadow:enabled` and
+>   `plugin:hy3:tabs:shadow:strength`. See [Configuration](#configuration).
+>
+> **Branches**
+> - `main`: the fork commits, rebased onto the upstream commit that
+>   matches the Hyprland release in use. It is rebased and force-pushed,
+>   not merged.
+> - `master`: upstream's branch, untouched.
+>
+> **Base**: upstream `db28808` (the `hyprpm.toml` pin for Hyprland 0.56.0),
+> built and used against Hyprland 0.56.2.
+>
+> **Syncing with upstream** after a Hyprland upgrade:
+> ```sh
+> git fetch upstream
+> # pick the upstream commit for the new Hyprland: its hyprpm.toml pin, or
+> # the last commit before upstream starts tracking Hyprland git
+> git rebase --onto <upstream-commit> <current-base> main
+> cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -B build && cmake --build build
+> git push --force-with-lease origin main
+> ```
+> Then update **Base** above.
+
 # hy3
 <a href="https://matrix.to/#/#hy3:outfoxxed.me"><img src="https://img.shields.io/badge/Join%20the%20matrix%20room-%23hy3:outfoxxed.me-0dbd8b?logo=matrix&style=flat-square"></a>
 
