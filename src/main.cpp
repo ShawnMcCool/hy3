@@ -54,6 +54,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 	CONF("tabs:text_padding", Int, 3);
 	CONF("tabs:opacity", Float, 1.0);
 	CONF("tabs:blur", Bool, true);
+	CONF("tabs:shadow:enabled", Bool, false);
+	CONF("tabs:shadow:strength", Float, 1.0);
 	CONF("tabs:colors:active", Color, 0x4033ccff);
 	CONF("tabs:colors:active_border", Color, 0xee33ccff);
 	CONF("tabs:colors:active_text", Color, 0xffffffff);

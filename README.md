@@ -315,6 +315,16 @@ plugin {
       # opacity multiplier for tabs
       # Applies to blur as well as the given colors.
       opacity = <float> # default: 1.0
+
+      # drop shadow under tabs, drawn with decoration:shadow's range, offset,
+      # render_power and the tabbed window's shadow color
+      shadow {
+        # if tabs cast a shadow. Also requires decoration:shadow:enabled.
+        enabled = <bool> # default: false
+
+        # alpha multiplier for the shadow
+        strength = <float> # default: 1.0
+      }
     }
 
     # autotiling settings

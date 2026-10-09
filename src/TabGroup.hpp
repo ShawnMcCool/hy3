@@ -165,6 +165,14 @@ private:
 	Vector2D last_pos;
 	Vector2D last_size;
 
+	// render the drop shadow under the tabs, called by renderTabBar.
+	void renderTabShadows(
+	    Render::CRenderContext& ctx,
+	    const std::vector<std::pair<Hy3TabBarEntry*, CBox>>& entry_boxes,
+	    float opacity,
+	    bool window_stencil
+	);
+
 	Hy3TabGroup();
 
 	// moving a Hy3TabGroup will unregister any active animations

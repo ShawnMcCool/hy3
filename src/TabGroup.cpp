@@ -656,10 +656,21 @@ void Hy3TabGroup::updateWithGroup(Hy3Node& node, bool warp) {
 	if (this->bar.dirty) this->tick();
 }
 
+// Logical distance the tab shadows reach beyond the tab bar, 0 when they are off.
+static double tabShadowExtent() {
+	static const auto shadow_enabled = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
+	static const auto shadow_range = CConfigValue<Config::INTEGER>("decoration:shadow:range");
+	static const auto shadow_offset = CConfigValue<Config::VEC2>("decoration:shadow:offset");
+	static const auto tab_shadow = CConfigValue<Config::INTEGER>("plugin:hy3:tabs:shadow:enabled");
+
+	if (!*shadow_enabled || !*tab_shadow) return 0.0;
+	return *shadow_range + std::max(std::abs((*shadow_offset).x), std::abs((*shadow_offset).y));
+}
+
 void Hy3TabBar::damageBox(const Vector2D* position, const Vector2D* size) {
 	auto box = CBox {position->x, position->y, size->x, size->y};
 	// Either a rounding error or an issue below makes this necessary.
-	box.expand(1);
+	box.expand(1 + tabShadowExtent());
 	g_pHyprRenderer->damageBox(box);
 	this->damaged = true;
 }
@@ -771,13 +782,15 @@ void Hy3TabGroup::renderTabBar(Render::CRenderContext& ctx) {
 		pixman_region32 damage;
 		pixman_region32_init(&damage);
 
+		auto paintedBox = scaledBox.copy().expand(tabShadowExtent() * scale);
+
 		pixman_region32_intersect_rect(
 		    &damage,
 		    ctx.m_data.damage.pixman(),
-		    scaledBox.x,
-		    scaledBox.y,
-		    scaledBox.width,
-		    scaledBox.height
+		    paintedBox.x,
+		    paintedBox.y,
+		    paintedBox.width,
+		    paintedBox.height
 		);
 
 		this->bar.damaged = pixman_region32_not_empty(&damage);
@@ -842,7 +855,10 @@ void Hy3TabGroup::renderTabBar(Render::CRenderContext& ctx) {
 	                  * (valid(this->workspace) ? this->workspace->m_alpha->value() : 1.0);
 	auto horizontal_padding = *padding_horizontal < 0 ? *padding : *padding_horizontal;
 
-	auto render_entry = [&](Hy3TabBarEntry& entry) {
+	// tab boxes in draw order
+	std::vector<std::pair<Hy3TabBarEntry*, CBox>> entry_boxes;
+
+	auto add_entry = [&](Hy3TabBarEntry& entry) {
 		auto [entry_x, entry_width] = tab_entry_geometry(
 		    box.w,
 		    horizontal_padding,
@@ -870,23 +886,136 @@ void Hy3TabGroup::renderTabBar(Render::CRenderContext& ctx) {
 		};
 
 		box.round();
-		entry.render(ctx, scale, box, fade_opacity);
+		entry_boxes.emplace_back(&entry, box);
 	};
 
 	for (auto& entry: this->bar.entries) {
 		if (entry.focused->goal() == 1.0) continue;
-		render_entry(entry);
+		add_entry(entry);
 	}
 
 	for (auto& entry: this->bar.entries) {
 		if (entry.focused->goal() == 0.0) continue;
-		render_entry(entry);
+		add_entry(entry);
+	}
+
+	if (tabShadowExtent() != 0.0) this->renderTabShadows(ctx, entry_boxes, fade_opacity, render_stencil);
+
+	for (auto& [entry, entry_box]: entry_boxes) {
+		entry->render(ctx, scale, entry_box, fade_opacity);
 	}
 
 	if (render_stencil) {
 		glClearStencil(0);
 		glStencilMask(0xff);
 		glClear(GL_STENCIL_BUFFER_BIT);
+		glDisable(GL_STENCIL_TEST);
+		glStencilFunc(GL_ALWAYS, 1, 0xff);
+	}
+}
+
+// Draws Hyprland's window drop shadow under each tab. The shadow is kept off the
+// tabs themselves, which may be translucent, and off the window below the bar,
+// which has already been drawn.
+void Hy3TabGroup::renderTabShadows(
+    Render::CRenderContext& ctx,
+    const std::vector<std::pair<Hy3TabBarEntry*, CBox>>& entry_boxes,
+    float opacity,
+    bool window_stencil
+) {
+	static const auto shadow_range = CConfigValue<Config::INTEGER>("decoration:shadow:range");
+	static const auto shadow_offset = CConfigValue<Config::VEC2>("decoration:shadow:offset");
+	static const auto shadow_color = CConfigValue<Config::IComplexConfigValue>("decoration:shadow:color");
+	static const auto shadow_color_inactive =
+	    CConfigValue<Config::IComplexConfigValue>("decoration:shadow:color_inactive");
+	static const auto strength = CConfigValue<Config::FLOAT>("plugin:hy3:tabs:shadow:strength");
+	static const auto s_radius = CConfigValue<Config::INTEGER>("plugin:hy3:tabs:radius");
+
+	if (entry_boxes.empty() || !this->target_window) return;
+
+	// The window's own shadow colour lives in its decoration's private animated
+	// gradient since 0.57; use the configured colours, chosen by focus, as the
+	// drop shadow decoration does once its fade settles.
+	auto focused = Desktop::focusState()->window() == this->target_window;
+	auto* color = dynamic_cast<Config::CGradientValueData*>(
+	    focused || !shadow_color_inactive.setByUser() ? shadow_color.ptr() : shadow_color_inactive.ptr()
+	);
+	if (!color) return;
+
+	auto presentation = this->target_window->presentation().renderPresentation();
+
+	auto& rdata = ctx.m_data;
+	auto& gl = Render::GL::g_pHyprOpenGL;
+	auto scale = rdata.pMonitor->m_scale;
+
+	auto radius = [&](const CBox& box) {
+		return (int) std::min((double) *s_radius * scale, std::min(box.width * 0.5, box.height * 0.5));
+	};
+
+	// Stencil bit 0x1 is the window cutout renderTabBar sets up while animating.
+	constexpr GLuint TAB_BIT = 0x2;
+
+	gl->scissor(ctx, (const pixman_box32*) nullptr);
+
+	if (!window_stencil) {
+		rdata.currentFB->bind();
+		glEnable(GL_STENCIL_TEST);
+	}
+
+	// mark the tab shapes
+	glStencilMask(TAB_BIT);
+	glClearStencil(0);
+	glClear(GL_STENCIL_BUFFER_BIT);
+	glStencilFunc(GL_ALWAYS, TAB_BIT, TAB_BIT);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+
+	for (auto& [entry, box]: entry_boxes) {
+		gl->renderRect(ctx, box, CHyprColor(0, 0, 0, 0), {.round = radius(box)});
+	}
+
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+	// draw outside the tabs (and outside the animation cutout, if any)
+	glStencilMask(0x00);
+	glStencilFunc(GL_EQUAL, 0, window_stencil ? (TAB_BIT | 0x1) : TAB_BIT);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+
+	// Hyprland cuts the window in currentWindow out of the shadow.
+	auto previous_window = rdata.currentWindow;
+	rdata.currentWindow = this->target_window;
+
+	auto range = *shadow_range * scale;
+	auto offset = Vector2D((*shadow_offset).x, (*shadow_offset).y) * scale;
+
+	for (auto& [entry, box]: entry_boxes) {
+		auto shadow_box = box.copy().expand(range).translate(offset);
+		if (shadow_box.width < 1 || shadow_box.height < 1) continue;
+
+		gl->renderRoundedShadow(
+		    ctx,
+		    shadow_box,
+		    radius(box),
+		    2.0,
+		    range,
+		    *color,
+		    opacity * entry->fade_opacity->value() * *strength,
+		    presentation
+		);
+	}
+
+	rdata.currentWindow = previous_window;
+
+	// clear the tab marks, then restore renderTabBar's stencil state
+	gl->scissor(ctx, (const pixman_box32*) nullptr);
+	glStencilMask(TAB_BIT);
+	glClearStencil(0);
+	glClear(GL_STENCIL_BUFFER_BIT);
+
+	if (window_stencil) {
+		glStencilMask(0x00);
+		glStencilFunc(GL_EQUAL, 0, 0xff);
+	} else {
 		glDisable(GL_STENCIL_TEST);
 		glStencilFunc(GL_ALWAYS, 1, 0xff);
 	}
